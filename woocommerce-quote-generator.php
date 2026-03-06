@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.0
+ * Version:      3.1
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -981,9 +981,33 @@ function wqg_build_quote_html($client_data)
                 }
             }
 
-            // 3. Fallback : image principale du produit WooCommerce
+            // 3. Fallback : image du produit WooCommerce (variation → parent)
+            // Certains plugins configurateurs (ex. Wombat) ne génèrent pas d'image
+            // pour les variations. On essaie d'abord l'image de la variation, puis
+            // celle du produit parent classique WooCommerce.
             if ($img_tag === '&nbsp;') {
                 $img_id = $product->get_image_id();
+
+                // Si la variation n'a pas d'image propre, remonter au produit parent
+                if (!$img_id && $product instanceof WC_Product_Variation) {
+                    $parent_id = $product->get_parent_id();
+                    if ($parent_id) {
+                        $parent_product = wc_get_product($parent_id);
+                        if ($parent_product) {
+                            $img_id = $parent_product->get_image_id();
+                        }
+                    }
+                }
+
+                // Dernier recours : product_id du cart item (couvre les cas où $product
+                // n'est pas une instance standard de WC_Product_Variation)
+                if (!$img_id && !empty($cart_item['product_id'])) {
+                    $fallback_product = wc_get_product((int) $cart_item['product_id']);
+                    if ($fallback_product) {
+                        $img_id = $fallback_product->get_image_id();
+                    }
+                }
+
                 if ($img_id) {
                     $img_src = wp_get_attachment_image_src($img_id, 'woocommerce_thumbnail');
                     if ($img_src) {
