@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.6
+ * Version:      3.6.1
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -162,7 +162,7 @@ function wqg_quote_form_shortcode()
                 $reps_cfg = array_values(array_filter($reps_cfg, function ($r) {
                     return !empty($r['name']);
                 }));
-                <?php if ($reps_on && !empty($reps_cfg)) :
+                if ($reps_on && !empty($reps_cfg)) :
                     $default_rep = (int) get_option('wqg_default_sales_rep', '0');
                 ?>
                 <div class="wqg-admin-header" style="margin-bottom:10px;">
