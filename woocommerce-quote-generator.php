@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.5
+ * Version:      3.6
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -162,15 +162,16 @@ function wqg_quote_form_shortcode()
                 $reps_cfg = array_values(array_filter($reps_cfg, function ($r) {
                     return !empty($r['name']);
                 }));
-                if ($reps_on && !empty($reps_cfg)) : ?>
+                <?php if ($reps_on && !empty($reps_cfg)) :
+                    $default_rep = (int) get_option('wqg_default_sales_rep', '0');
+                ?>
                 <div class="wqg-admin-header" style="margin-bottom:10px;">
                     <span class="wqg-admin-badge">ADMIN</span>
                     <strong>Commercial en charge du devis</strong>
                 </div>
                 <select name="wqg_sales_rep_id" id="wqg-sales-rep-select" style="width:100%; margin-bottom:18px; padding:8px;">
-                    <option value="0">— Aucun commercial —</option>
                     <?php foreach ($reps_cfg as $idx => $rep) : ?>
-                    <option value="<?php echo $idx + 1; ?>"><?php echo esc_html($rep['name']); ?></option>
+                    <option value="<?php echo $idx + 1; ?>" <?php selected($idx, $default_rep); ?>><?php echo esc_html($rep['name']); ?></option>
                     <?php endforeach; ?>
                 </select>
                 <?php endif; ?>
@@ -1724,18 +1725,30 @@ function wqg_generate_quote()
         $manual_ttc_total += round($m_ht * (1 + $m_tva / 100), 4) * $m_qty;
     }
 
-    // Commercial sélectionné (admins seulement, feature activée)
+    // Commercial : sélection explicite (admin) ou commercial par défaut (tous)
     $sales_rep = [];
-    if (
-        is_user_logged_in() &&
-        (current_user_can('administrator') || current_user_can('manage_woocommerce')) &&
-        get_option('wqg_enable_sales_reps', '0') === '1' &&
-        !empty($_POST['wqg_sales_rep_id'])
-    ) {
-        $rep_idx  = (int) $_POST['wqg_sales_rep_id'] - 1; // 1-indexé dans le formulaire
+    if (get_option('wqg_enable_sales_reps', '0') === '1') {
         $all_reps = get_option('wqg_sales_reps', []);
-        if (is_array($all_reps) && isset($all_reps[$rep_idx]) && !empty($all_reps[$rep_idx]['name'])) {
-            $sales_rep = $all_reps[$rep_idx];
+        if (!is_array($all_reps)) $all_reps = [];
+
+        // 1. Sélection explicite par un admin via le formulaire
+        if (
+            is_user_logged_in() &&
+            (current_user_can('administrator') || current_user_can('manage_woocommerce')) &&
+            isset($_POST['wqg_sales_rep_id']) && (int) $_POST['wqg_sales_rep_id'] > 0
+        ) {
+            $rep_idx = (int) $_POST['wqg_sales_rep_id'] - 1; // 1-indexé dans le formulaire
+            if (isset($all_reps[$rep_idx]) && !empty($all_reps[$rep_idx]['name'])) {
+                $sales_rep = $all_reps[$rep_idx];
+            }
+        }
+
+        // 2. Fallback : commercial par défaut (pour tous les utilisateurs, y compris non-admin)
+        if (empty($sales_rep)) {
+            $default_idx = (int) get_option('wqg_default_sales_rep', '0');
+            if (isset($all_reps[$default_idx]) && !empty($all_reps[$default_idx]['name'])) {
+                $sales_rep = $all_reps[$default_idx];
+            }
         }
     }
 
@@ -2447,6 +2460,10 @@ function wqg_register_settings()
         'type'              => 'array',
         'sanitize_callback' => 'wqg_sanitize_sales_reps',
     ]);
+
+    // Index (0-based) du commercial par défaut (-1 = aucun)
+    add_option('wqg_default_sales_rep', '0');
+    register_setting('wqg_options_group', 'wqg_default_sales_rep');
 }
 
 /**
@@ -2746,13 +2763,23 @@ function wqg_options_page()
                 </tr>
             </table>
 
+            <?php $default_rep_idx = (int) get_option('wqg_default_sales_rep', '0'); ?>
             <div id="wqg-sales-reps-section" style="<?php echo $reps_enabled !== '1' ? 'display:none;' : ''; ?>">
                 <?php for ($i = 0; $i < 5; $i++) :
                     $rep = $sales_reps[$i];
                     $num = $i + 1;
                 ?>
                 <table class="form-table" style="margin-top:0; border-left:4px solid #2271b1; padding-left:12px; margin-bottom:15px; background:#f9f9f9;">
-                    <tr><td colspan="2"><strong>Commercial <?php echo $num; ?></strong><?php if ($i === 0) : ?> <span style="color:#999;">(laissez le nom vide pour ignorer un slot)</span><?php endif; ?></td></tr>
+                    <tr>
+                        <td colspan="2" style="display:flex; align-items:center; gap:12px;">
+                            <strong>Commercial <?php echo $num; ?></strong>
+                            <label style="margin-left:auto; font-size:12px; color:#2271b1; cursor:pointer;">
+                                <input type="radio" name="wqg_default_sales_rep" value="<?php echo $i; ?>" <?php checked($default_rep_idx, $i); ?> />
+                                Par défaut
+                            </label>
+                            <?php if ($i === 0) : ?><span style="color:#999; font-size:12px;">(laissez le nom vide pour ignorer un slot)</span><?php endif; ?>
+                        </td>
+                    </tr>
                     <tr>
                         <th><label>Nom</label></th>
                         <td><input type="text" name="wqg_sales_reps[<?php echo $i; ?>][name]" class="regular-text" value="<?php echo esc_attr($rep['name']); ?>" placeholder="Ex : Jean Dupont" /></td>
