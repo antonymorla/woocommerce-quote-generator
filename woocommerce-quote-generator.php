@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.2
+ * Version:      3.3
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -30,22 +30,26 @@ if (!defined('WQG_DEFAULT_AI_PROMPT')) {
 define('WQG_DEFAULT_AI_PROMPT',
     "Tu es un expert technique en produits de construction et d'aménagement extérieur.\n" .
     "Génère une FICHE TECHNIQUE en français, en {max_mots} mots maximum.\n\n" .
+    "RÈGLE FONDAMENTALE : utilise UNIQUEMENT les données explicitement présentes dans la description\n" .
+    "et les options de configuration fournies. N'ajoute, ne déduis et n'invente JAMAIS d'information\n" .
+    "qui n'est pas textuellement présente dans les données source. Si une information n'est pas\n" .
+    "mentionnée (certifications, normes, résistances, poids, etc.), NE LA MENTIONNE PAS.\n\n" .
     "FORMAT STRICTEMENT OBLIGATOIRE — liste de points bullet uniquement :\n" .
     "• LIBELLÉ EN MAJUSCULES : valeur(s) précise(s)\n" .
-    "Exemple : • DIMENSIONS : L 300 × l 200 × H 250 cm\n\n" .
-    "CONTENU À INCLURE (uniquement les données mesurables présentes dans la description) :\n" .
-    "• Dimensions (longueur, largeur, hauteur, épaisseur)\n" .
-    "• Matériaux principaux et secondaires\n" .
-    "• Traitements de surface (thermolaqué, galvanisé, traité autoclave, etc.)\n" .
-    "• Résistances certifiées (neige kg/m², vent km/h, charge utile)\n" .
-    "• Normes et certifications\n" .
-    "• Poids et dimensions d'expédition si disponibles\n" .
-    "• Finitions et coloris\n" .
-    "• Si une configuration est fournie : intégrer les options choisies (dimensions, ouvertures, extensions, accessoires) avec leurs valeurs exactes\n\n" .
+    "Exemple : • DIMENSIONS EXTÉRIEURES : L 300 × l 200 × H 250 cm\n\n" .
+    "CONTENU À INCLURE (si et seulement si présent dans les données source) :\n" .
+    "• Dimensions (toutes celles fournies : intérieures, extérieures, dalle, hors tout)\n" .
+    "• Matériaux principaux mentionnés\n" .
+    "• Traitements de surface mentionnés\n" .
+    "• Finitions et coloris mentionnés\n" .
+    "• Si une configuration est fournie : intégrer les options activées avec leurs valeurs exactes\n" .
+    "  (dimensions, ouvertures, extensions, bardage, couverture, menuiserie, accessoires)\n\n" .
     "INTERDICTIONS ABSOLUES :\n" .
+    "• Inventer ou déduire des informations non présentes dans les données source\n" .
+    "• Ajouter des certifications, normes, résistances ou labels non explicitement mentionnés\n" .
     "• Phrases rédigées, introduction ou conclusion\n" .
     "• Formulations commerciales (livraison rapide, facile à monter, personnalisable, etc.)\n" .
-    "• Informations absentes de la description source\n" .
+    "• Mentionner « non spécifié » ou « non précisé » — omettre simplement la ligne\n" .
     "• Numérotation ou sous-titres"
 );
 } // end if (!defined)
@@ -493,6 +497,69 @@ function wqg_get_cart_item_options($cart_item)
             if (!in_array($key, $seen, true)) {
                 $options[] = ['label' => $k, 'value' => $v];
                 $seen[]    = $key;
+            }
+        }
+    }
+
+    // --- 4. Dimensions de la variation WooCommerce (WAPF [var_*]) ---
+    // Certains configurateurs (ex. WAPF avec formules calc) stockent les dimensions
+    // dans les attributs ou les métas de la variation WooCommerce. On les récupère
+    // pour enrichir la fiche technique du devis.
+    $variation_id = (int) ($cart_item['variation_id'] ?? 0);
+    if ($variation_id > 0) {
+        $var_product = isset($cart_item['data']) && $cart_item['data'] instanceof WC_Product_Variation
+            ? $cart_item['data']
+            : wc_get_product($variation_id);
+
+        if ($var_product instanceof WC_Product_Variation) {
+            // Clés de dimension connues (issues des formules WAPF [var_*])
+            $dimension_keys = [
+                'largeur_interieur'          => 'Largeur intérieure',
+                'largeur_exterieur_des_murs' => 'Largeur extérieure des murs',
+                'largeur_dalle'              => 'Largeur de la dalle',
+                'largeur_hors_tout'          => 'Largeur hors tout',
+                'profondeur_interieur'       => 'Profondeur intérieure',
+                'profondeur_exterieur_des_murs' => 'Profondeur extérieure des murs',
+                'profondeur_dalle'           => 'Profondeur de la dalle',
+                'profondeur_hors_tout'       => 'Profondeur hors tout',
+                'hauteur_interieur'          => 'Hauteur intérieure',
+                'surface_de_mur'             => 'Surface de mur',
+            ];
+
+            foreach ($dimension_keys as $meta_key => $label) {
+                $key_lower = strtolower($label);
+                if (in_array($key_lower, $seen, true)) {
+                    continue; // déjà capturé par WAPF ou autre
+                }
+
+                // Tenter plusieurs formats de stockage (attribut WC, post_meta, _préfixé)
+                $value = '';
+                $attr_val = $var_product->get_attribute('pa_' . $meta_key);
+                if (empty($attr_val)) {
+                    $attr_val = $var_product->get_attribute($meta_key);
+                }
+                if (!empty($attr_val)) {
+                    $value = $attr_val;
+                } else {
+                    // Fallback : post_meta directement sur la variation
+                    $meta_val = get_post_meta($variation_id, $meta_key, true);
+                    if (empty($meta_val)) {
+                        $meta_val = get_post_meta($variation_id, '_' . $meta_key, true);
+                    }
+                    if (!empty($meta_val)) {
+                        $value = $meta_val;
+                    }
+                }
+
+                if (!empty($value)) {
+                    // Ajouter l'unité si absente
+                    $v = wp_strip_all_tags((string) $value);
+                    if (is_numeric($v) || preg_match('/^\d+([.,]\d+)?$/', $v)) {
+                        $v .= ' m';
+                    }
+                    $options[] = ['label' => $label, 'value' => $v];
+                    $seen[]    = $key_lower;
+                }
             }
         }
     }
