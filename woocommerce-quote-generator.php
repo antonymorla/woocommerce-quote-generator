@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.4
+ * Version:      3.5
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -155,23 +155,22 @@ function wqg_quote_form_shortcode()
             <div id="wqg-admin-section">
 
                 <?php
-                // --- Sélecteur d'émetteur (si activé dans les réglages) ---
-                $multi_em_on  = get_option('wqg_enable_multi_emitters', '0') === '1';
-                $emitters_cfg = $multi_em_on ? get_option('wqg_emitters', []) : [];
-                if (!is_array($emitters_cfg)) $emitters_cfg = [];
-                // Ne garder que les émetteurs avec un nom
-                $emitters_cfg = array_values(array_filter($emitters_cfg, function ($e) {
-                    return !empty($e['name']);
+                // --- Sélecteur de commercial (si activé dans les réglages) ---
+                $reps_on  = get_option('wqg_enable_sales_reps', '0') === '1';
+                $reps_cfg = $reps_on ? get_option('wqg_sales_reps', []) : [];
+                if (!is_array($reps_cfg)) $reps_cfg = [];
+                $reps_cfg = array_values(array_filter($reps_cfg, function ($r) {
+                    return !empty($r['name']);
                 }));
-                if ($multi_em_on && !empty($emitters_cfg)) : ?>
+                if ($reps_on && !empty($reps_cfg)) : ?>
                 <div class="wqg-admin-header" style="margin-bottom:10px;">
                     <span class="wqg-admin-badge">ADMIN</span>
-                    <strong>Émetteur du devis</strong>
+                    <strong>Commercial en charge du devis</strong>
                 </div>
-                <select name="wqg_emitter_id" id="wqg-emitter-select" style="width:100%; margin-bottom:18px; padding:8px;">
-                    <option value="0">Émetteur par défaut (<?php echo esc_html(get_option('wqg_company_name', 'Réglages')); ?>)</option>
-                    <?php foreach ($emitters_cfg as $idx => $em) : ?>
-                    <option value="<?php echo $idx + 1; ?>"><?php echo esc_html($em['name']); ?></option>
+                <select name="wqg_sales_rep_id" id="wqg-sales-rep-select" style="width:100%; margin-bottom:18px; padding:8px;">
+                    <option value="0">— Aucun commercial —</option>
+                    <?php foreach ($reps_cfg as $idx => $rep) : ?>
+                    <option value="<?php echo $idx + 1; ?>"><?php echo esc_html($rep['name']); ?></option>
                     <?php endforeach; ?>
                 </select>
                 <?php endif; ?>
@@ -794,16 +793,10 @@ function wqg_build_quote_html($client_data)
     $validity     = date('d/m/Y', strtotime('+1 week'));
 
     // --- Options du plugin ---
-    // Émetteur : utiliser l'override s'il est renseigné, sinon les réglages par défaut
-    $company_name    = !empty($client_data['emitter_name'])
-        ? $client_data['emitter_name']
-        : get_option('wqg_company_name', 'SAS Abri Francais');
-    $company_address = !empty($client_data['emitter_address'])
-        ? $client_data['emitter_address']
-        : get_option('wqg_company_address', 'Hameau des Auvillers, 59480 Illies');
-    $company_logo    = !empty($client_data['emitter_logo'])
-        ? $client_data['emitter_logo']
-        : get_option('wqg_company_logo', '');
+    $company_name    = get_option('wqg_company_name', 'SAS Abri Francais');
+    $company_address = get_option('wqg_company_address', 'Hameau des Auvillers, 59480 Illies');
+    $company_logo    = get_option('wqg_company_logo', '');
+    $sales_rep       = $client_data['sales_rep'] ?? [];
     $terms_url       = get_option('wqg_terms_conditions_url', '');
     $custom_footer   = get_option('wqg_custom_footer', '');
     $show_images     = get_option('wqg_show_product_images', '1') === '1';
@@ -994,7 +987,14 @@ function wqg_build_quote_html($client_data)
             <td class="info-cell info-divider">
                 <div class="info-label">&#201;metteur</div>
                 <div class="info-name">' . esc_html($company_name) . '</div>
-                <div class="info-detail">' . nl2br(esc_html($company_address)) . '</div>
+                <div class="info-detail">' . nl2br(esc_html($company_address)) . '</div>'
+                . (!empty($sales_rep['name'])
+                    ? '<div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.3); font-size:10px;">'
+                      . '<strong>Votre contact :</strong> ' . esc_html($sales_rep['name'])
+                      . (!empty($sales_rep['phone']) ? '<br>' . esc_html($sales_rep['phone']) : '')
+                      . (!empty($sales_rep['email']) ? '<br>' . esc_html($sales_rep['email']) : '')
+                      . '</div>'
+                    : '') . '
             </td>
             <td class="info-cell">
                 <div class="info-label">Destinataire</div>
@@ -1724,33 +1724,31 @@ function wqg_generate_quote()
         $manual_ttc_total += round($m_ht * (1 + $m_tva / 100), 4) * $m_qty;
     }
 
-    // Émetteur alternatif (admins seulement, feature activée)
-    $emitter_override = [];
+    // Commercial sélectionné (admins seulement, feature activée)
+    $sales_rep = [];
     if (
         is_user_logged_in() &&
         (current_user_can('administrator') || current_user_can('manage_woocommerce')) &&
-        get_option('wqg_enable_multi_emitters', '0') === '1' &&
-        !empty($_POST['wqg_emitter_id'])
+        get_option('wqg_enable_sales_reps', '0') === '1' &&
+        !empty($_POST['wqg_sales_rep_id'])
     ) {
-        $emitter_idx = (int) $_POST['wqg_emitter_id'] - 1; // 1-indexé dans le formulaire
-        $emitters    = get_option('wqg_emitters', []);
-        if (is_array($emitters) && isset($emitters[$emitter_idx]) && !empty($emitters[$emitter_idx]['name'])) {
-            $emitter_override = $emitters[$emitter_idx];
+        $rep_idx  = (int) $_POST['wqg_sales_rep_id'] - 1; // 1-indexé dans le formulaire
+        $all_reps = get_option('wqg_sales_reps', []);
+        if (is_array($all_reps) && isset($all_reps[$rep_idx]) && !empty($all_reps[$rep_idx]['name'])) {
+            $sales_rep = $all_reps[$rep_idx];
         }
     }
 
     $client_data = [
-        'name'           => $name,
-        'surname'        => $surname,
-        'email'          => $email,
-        'phone'          => $phone,
-        'address'        => $address,
-        'quote_number'   => $quote_number,
-        'quote_date'     => $quote_date,
-        'manual_items'   => $manual_items,
-        'emitter_name'   => $emitter_override['name']    ?? '',
-        'emitter_address'=> $emitter_override['address'] ?? '',
-        'emitter_logo'   => $emitter_override['logo']    ?? '',
+        'name'         => $name,
+        'surname'      => $surname,
+        'email'        => $email,
+        'phone'        => $phone,
+        'address'      => $address,
+        'quote_number' => $quote_number,
+        'quote_date'   => $quote_date,
+        'manual_items' => $manual_items,
+        'sales_rep'    => $sales_rep, // ['name' => ..., 'email' => ..., 'phone' => ...] ou []
     ];
 
     require_once plugin_dir_path(__FILE__) . 'vendor/autoload.php';
@@ -1782,9 +1780,7 @@ function wqg_generate_quote()
             'margin_footer' => 6,
             'tempDir'       => $mpdf_tmp,
         ]);
-        $pdf_company = !empty($client_data['emitter_name'])
-            ? $client_data['emitter_name']
-            : get_option('wqg_company_name', '');
+        $pdf_company = get_option('wqg_company_name', '');
         $mpdf->SetTitle('Devis ' . $quote_number);
         $mpdf->SetAuthor($pdf_company);
 
@@ -2442,38 +2438,37 @@ function wqg_register_settings()
         register_setting('wqg_options_group', $key);
     }
 
-    // --- Émetteurs multiples ---
-    add_option('wqg_enable_multi_emitters', '0');
-    register_setting('wqg_options_group', 'wqg_enable_multi_emitters');
+    // --- Commerciaux ---
+    add_option('wqg_enable_sales_reps', '0');
+    register_setting('wqg_options_group', 'wqg_enable_sales_reps');
 
-    add_option('wqg_emitters', []);
-    register_setting('wqg_options_group', 'wqg_emitters', [
+    add_option('wqg_sales_reps', []);
+    register_setting('wqg_options_group', 'wqg_sales_reps', [
         'type'              => 'array',
-        'sanitize_callback' => 'wqg_sanitize_emitters',
+        'sanitize_callback' => 'wqg_sanitize_sales_reps',
     ]);
 }
 
 /**
- * Sanitize le tableau des émetteurs (max 5, champs texte).
+ * Sanitize le tableau des commerciaux (max 5).
  */
-function wqg_sanitize_emitters($input)
+function wqg_sanitize_sales_reps($input)
 {
     $clean = [];
     if (!is_array($input)) {
         return $clean;
     }
     $count = 0;
-    foreach ($input as $emitter) {
+    foreach ($input as $rep) {
         if ($count >= 5) break;
-        $name    = isset($emitter['name'])    ? sanitize_text_field($emitter['name']) : '';
-        $address = isset($emitter['address']) ? sanitize_textarea_field($emitter['address']) : '';
-        $logo    = isset($emitter['logo'])    ? esc_url_raw($emitter['logo']) : '';
-        // Ne garder que les émetteurs avec au moins un nom
+        $name  = isset($rep['name'])  ? sanitize_text_field($rep['name']) : '';
+        $email = isset($rep['email']) ? sanitize_email($rep['email']) : '';
+        $phone = isset($rep['phone']) ? sanitize_text_field($rep['phone']) : '';
         if (!empty($name)) {
             $clean[] = [
-                'name'    => $name,
-                'address' => $address,
-                'logo'    => $logo,
+                'name'  => $name,
+                'email' => $email,
+                'phone' => $phone,
             ];
             $count++;
         }
@@ -2728,56 +2723,47 @@ function wqg_options_page()
                 </tr>
             </table>
 
-            <!-- ===== Section Émetteurs multiples ===== -->
+            <!-- ===== Section Commerciaux ===== -->
             <?php
-            $multi_enabled = get_option('wqg_enable_multi_emitters', '0');
-            $emitters      = get_option('wqg_emitters', []);
-            if (!is_array($emitters)) $emitters = [];
-            // Toujours afficher 5 slots (pré-remplis ou vides)
-            while (count($emitters) < 5) {
-                $emitters[] = ['name' => '', 'address' => '', 'logo' => ''];
+            $reps_enabled = get_option('wqg_enable_sales_reps', '0');
+            $sales_reps   = get_option('wqg_sales_reps', []);
+            if (!is_array($sales_reps)) $sales_reps = [];
+            while (count($sales_reps) < 5) {
+                $sales_reps[] = ['name' => '', 'email' => '', 'phone' => ''];
             }
             ?>
             <table class="form-table">
-                <tr><td colspan="2"><h3 style="margin:0 0 5px;">👥 Émetteurs multiples</h3></td></tr>
+                <tr><td colspan="2"><h3 style="margin:0 0 5px;">👤 Commerciaux</h3></td></tr>
                 <tr>
-                    <th><label for="wqg_enable_multi_emitters">Activer</label></th>
+                    <th><label for="wqg_enable_sales_reps">Activer</label></th>
                     <td>
                         <label>
-                            <input type="checkbox" id="wqg_enable_multi_emitters" name="wqg_enable_multi_emitters" value="1" <?php checked($multi_enabled, '1'); ?> />
-                            Permettre de choisir un émetteur différent lors de la génération du devis (admin uniquement)
+                            <input type="checkbox" id="wqg_enable_sales_reps" name="wqg_enable_sales_reps" value="1" <?php checked($reps_enabled, '1'); ?> />
+                            Permettre de sélectionner un commercial lors de la génération du devis (admin uniquement)
                         </label>
-                        <p class="description">Lorsqu'activé, les administrateurs voient un sélecteur d'émetteur sur le formulaire de devis.</p>
+                        <p class="description">Les coordonnées du commercial sélectionné seront ajoutées dans le bloc Émetteur du devis PDF.</p>
                     </td>
                 </tr>
             </table>
 
-            <div id="wqg-emitters-section" style="<?php echo $multi_enabled !== '1' ? 'display:none;' : ''; ?>">
+            <div id="wqg-sales-reps-section" style="<?php echo $reps_enabled !== '1' ? 'display:none;' : ''; ?>">
                 <?php for ($i = 0; $i < 5; $i++) :
-                    $em = $emitters[$i];
+                    $rep = $sales_reps[$i];
                     $num = $i + 1;
                 ?>
                 <table class="form-table" style="margin-top:0; border-left:4px solid #2271b1; padding-left:12px; margin-bottom:15px; background:#f9f9f9;">
-                    <tr><td colspan="2"><strong>Émetteur <?php echo $num; ?></strong><?php if ($i === 0) : ?> <span style="color:#999;">(laissez le nom vide pour ignorer un slot)</span><?php endif; ?></td></tr>
+                    <tr><td colspan="2"><strong>Commercial <?php echo $num; ?></strong><?php if ($i === 0) : ?> <span style="color:#999;">(laissez le nom vide pour ignorer un slot)</span><?php endif; ?></td></tr>
                     <tr>
                         <th><label>Nom</label></th>
-                        <td><input type="text" name="wqg_emitters[<?php echo $i; ?>][name]" class="regular-text" value="<?php echo esc_attr($em['name']); ?>" placeholder="Ex : SAS Ma Pergola Bois" /></td>
+                        <td><input type="text" name="wqg_sales_reps[<?php echo $i; ?>][name]" class="regular-text" value="<?php echo esc_attr($rep['name']); ?>" placeholder="Ex : Jean Dupont" /></td>
                     </tr>
                     <tr>
-                        <th><label>Adresse</label></th>
-                        <td><textarea name="wqg_emitters[<?php echo $i; ?>][address]" rows="2" class="regular-text" placeholder="Rue, code postal, ville"><?php echo esc_textarea($em['address']); ?></textarea></td>
+                        <th><label>Email</label></th>
+                        <td><input type="email" name="wqg_sales_reps[<?php echo $i; ?>][email]" class="regular-text" value="<?php echo esc_attr($rep['email']); ?>" placeholder="jean.dupont@entreprise.fr" /></td>
                     </tr>
                     <tr>
-                        <th><label>Logo</label></th>
-                        <td>
-                            <?php $em_logo = $em['logo'] ?? ''; ?>
-                            <div class="wqg-emitter-logo-preview" style="margin-bottom:6px; <?php echo empty($em_logo) ? 'display:none;' : ''; ?>">
-                                <img src="<?php echo esc_url($em_logo); ?>" style="max-height:60px; max-width:250px; border:1px solid #ddd; padding:3px; background:#fff;" />
-                            </div>
-                            <input type="hidden" name="wqg_emitters[<?php echo $i; ?>][logo]" class="wqg-emitter-logo-input" value="<?php echo esc_attr($em_logo); ?>" />
-                            <button type="button" class="button wqg-emitter-logo-btn">📁 Choisir</button>
-                            <button type="button" class="button wqg-emitter-logo-remove" style="color:#a00; <?php echo empty($em_logo) ? 'display:none;' : ''; ?>">✕</button>
-                        </td>
+                        <th><label>Téléphone</label></th>
+                        <td><input type="tel" name="wqg_sales_reps[<?php echo $i; ?>][phone]" class="regular-text" value="<?php echo esc_attr($rep['phone']); ?>" placeholder="06 12 34 56 78" /></td>
                     </tr>
                 </table>
                 <?php endfor; ?>
@@ -2815,40 +2801,9 @@ function wqg_options_page()
                 $(this).hide();
             });
 
-            // ---- Toggle section émetteurs multiples ----
-            $('#wqg_enable_multi_emitters').on('change', function() {
-                $('#wqg-emitters-section').toggle(this.checked);
-            });
-
-            // ---- Sélecteur de média pour les logos émetteurs ----
-            $(document).on('click', '.wqg-emitter-logo-btn', function(e) {
-                e.preventDefault();
-                var $btn    = $(this);
-                var $row    = $btn.closest('td');
-                var $input  = $row.find('.wqg-emitter-logo-input');
-                var $prev   = $row.find('.wqg-emitter-logo-preview');
-                var $remove = $row.find('.wqg-emitter-logo-remove');
-                var frame   = wp.media({
-                    title: 'Sélectionner le logo',
-                    button: { text: 'Utiliser cette image' },
-                    multiple: false,
-                    library: { type: 'image' }
-                });
-                frame.on('select', function() {
-                    var att = frame.state().get('selection').first().toJSON();
-                    $input.val(att.url);
-                    $prev.find('img').attr('src', att.url);
-                    $prev.show();
-                    $remove.show();
-                });
-                frame.open();
-            });
-            $(document).on('click', '.wqg-emitter-logo-remove', function(e) {
-                e.preventDefault();
-                var $row = $(this).closest('td');
-                $row.find('.wqg-emitter-logo-input').val('');
-                $row.find('.wqg-emitter-logo-preview').hide();
-                $(this).hide();
+            // ---- Toggle section commerciaux ----
+            $('#wqg_enable_sales_reps').on('change', function() {
+                $('#wqg-sales-reps-section').toggle(this.checked);
             });
         });
         </script>
