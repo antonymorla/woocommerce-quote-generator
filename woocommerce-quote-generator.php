@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.1
+ * Version:      3.2
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -171,6 +171,73 @@ function wqg_quote_form_shortcode()
     return ob_get_clean();
 }
 add_shortcode('wqg_quote_form', 'wqg_quote_form_shortcode');
+
+// ============================================================
+// HELPER : CHEMIN LOCAL D'IMAGE POUR MPDF
+// ============================================================
+// mPDF ne peut souvent pas charger les images via HTTP (loopback bloqué
+// sur de nombreux hébergeurs WordPress). Cette fonction convertit un
+// attachment ID en chemin local sur le disque, que mPDF charge sans souci.
+
+/**
+ * Résout le chemin local (ou URL en fallback) d'un attachment WordPress
+ * pour l'intégration dans le HTML destiné à mPDF.
+ *
+ * @param int    $attachment_id L'ID de l'attachment WordPress.
+ * @param string $size          La taille souhaitée ('woocommerce_thumbnail', 'large', etc.).
+ * @return string               Chemin local du fichier, ou URL en dernier recours, ou '' si introuvable.
+ */
+function wqg_get_image_for_mpdf($attachment_id, $size = 'woocommerce_thumbnail')
+{
+    if (!$attachment_id) {
+        return '';
+    }
+
+    $upload_dir = wp_upload_dir();
+
+    // 1. Taille demandée : convertir l'URL en chemin local
+    $src = wp_get_attachment_image_src($attachment_id, $size);
+    if ($src && !empty($src[0])) {
+        $url = $src[0];
+        if (strpos($url, $upload_dir['baseurl']) === 0) {
+            $local = str_replace($upload_dir['baseurl'], $upload_dir['basedir'], $url);
+            if (file_exists($local)) {
+                return $local;
+            }
+        }
+    }
+
+    // 2. Fichier original (pleine résolution)
+    $original = get_attached_file($attachment_id);
+    if ($original && file_exists($original)) {
+        return $original;
+    }
+
+    // 3. Dernier recours : URL (fonctionnera si le serveur autorise le loopback)
+    return ($src && !empty($src[0])) ? $src[0] : '';
+}
+
+/**
+ * Convertit une URL d'image WordPress en chemin local sur le disque.
+ * Utile pour les URLs déjà résolues (galeries, etc.).
+ *
+ * @param string $url L'URL de l'image.
+ * @return string     Chemin local ou URL originale si la conversion échoue.
+ */
+function wqg_url_to_local_path($url)
+{
+    if (empty($url)) {
+        return '';
+    }
+    $upload_dir = wp_upload_dir();
+    if (strpos($url, $upload_dir['baseurl']) === 0) {
+        $local = str_replace($upload_dir['baseurl'], $upload_dir['basedir'], $url);
+        if (file_exists($local)) {
+            return $local;
+        }
+    }
+    return $url;
+}
 
 // ============================================================
 // RÉSUMÉ IA VIA OPENROUTER (ou troncature simple)
@@ -804,7 +871,8 @@ function wqg_build_quote_html($client_data)
             <td class="header-logo-cell">';
 
     if (!empty($company_logo)) {
-        $html .= '<img src="' . esc_url($company_logo) . '" alt="' . esc_attr($company_name) . '" style="max-height:58px; display:block;" />';
+        $logo_src = wqg_url_to_local_path($company_logo);
+        $html .= '<img src="' . $logo_src . '" alt="' . esc_attr($company_name) . '" style="max-height:58px; display:block;" />';
     } else {
         $html .= '<span style="font-size:17px; font-weight:bold; color:#ffffff;">' . esc_html($company_name) . '</span>';
     }
@@ -940,9 +1008,9 @@ function wqg_build_quote_html($client_data)
                         }
                     }
                     foreach ((array) $wpc_gallery_ids as $gid) {
-                        $gurl = wp_get_attachment_image_url((int) $gid, 'large');
-                        if ($gurl) {
-                            $wpc_detail_imgs[] = esc_url($gurl);
+                        $gpath = wqg_get_image_for_mpdf((int) $gid, 'large');
+                        if ($gpath) {
+                            $wpc_detail_imgs[] = $gpath;
                         }
                     }
                 }
@@ -964,19 +1032,19 @@ function wqg_build_quote_html($client_data)
                 $wapf_hash   = sanitize_file_name($cart_item['generated_image']);
                 $wapf_upload = wp_upload_dir();
                 $wapf_dir    = $wapf_upload['basedir'] . '/wapf-layers/';
-                $wapf_base   = $wapf_upload['baseurl'] . '/wapf-layers/';
 
                 // Priorité à la pleine résolution, fallback sur le thumbnail
+                // Utilise le chemin local (pas l'URL) pour que mPDF charge directement le fichier.
                 if (file_exists($wapf_dir . $wapf_hash . '.png')) {
-                    $wapf_img_url = $wapf_base . $wapf_hash . '.png';
+                    $wapf_img_path = $wapf_dir . $wapf_hash . '.png';
                 } elseif (file_exists($wapf_dir . $wapf_hash . '-thumb.png')) {
-                    $wapf_img_url = $wapf_base . $wapf_hash . '-thumb.png';
+                    $wapf_img_path = $wapf_dir . $wapf_hash . '-thumb.png';
                 } else {
-                    $wapf_img_url = '';
+                    $wapf_img_path = '';
                 }
 
-                if (!empty($wapf_img_url)) {
-                    $img_tag = '<img src="' . esc_url($wapf_img_url) . '" width="150"'
+                if (!empty($wapf_img_path)) {
+                    $img_tag = '<img src="' . $wapf_img_path . '" width="150"'
                              . ' style="display:block; margin:auto; object-fit:contain;" />';
                 }
             }
@@ -1009,9 +1077,9 @@ function wqg_build_quote_html($client_data)
                 }
 
                 if ($img_id) {
-                    $img_src = wp_get_attachment_image_src($img_id, 'woocommerce_thumbnail');
-                    if ($img_src) {
-                        $img_tag = '<img src="' . esc_url($img_src[0]) . '" width="150"'
+                    $img_path = wqg_get_image_for_mpdf($img_id, 'woocommerce_thumbnail');
+                    if ($img_path) {
+                        $img_tag = '<img src="' . $img_path . '" width="150"'
                                  . ' style="display:block; margin:auto; object-fit:contain;" />';
                     }
                 }
@@ -1186,9 +1254,9 @@ function wqg_build_quote_html($client_data)
                         if (!empty($allowed_idxs) && !in_array($pos1, $allowed_idxs, true)) {
                             continue;
                         }
-                        $url = wp_get_attachment_image_url((int) $att_id, 'large');
-                        if ($url) {
-                            $var_images[] = esc_url($url);
+                        $img_path = wqg_get_image_for_mpdf((int) $att_id, 'large');
+                        if ($img_path) {
+                            $var_images[] = $img_path;
                         }
                     }
                     if (!empty($var_images)) {
