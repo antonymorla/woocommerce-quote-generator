@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.6.1
+ * Version:      3.7
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -1570,7 +1570,7 @@ function wqg_build_quote_html($client_data)
         $html .= 'Scannez le QR code ci-contre ou cliquez sur le lien ci-dessous pour retrouver votre panier et passer commande&nbsp;:';
         $html .= '</div>';
         $html .= '<div style="font-size:10px;"><a href="' . esc_url($share_url) . '" style="color:' . $ca . '; text-decoration:underline; word-break:break-all;">' . esc_html($share_url) . '</a></div>';
-        $expiry_days = max(1, (int) get_option('wqg_cart_share_expiry', 30));
+        $expiry_days = max(60, (int) get_option('wqg_cart_share_expiry', 60));
         $html .= '<div style="font-size:9px; color:#999; margin-top:4px;">Ce lien est valable ' . $expiry_days . ' jours.</div>';
         $html .= '</td>';
         $html .= '</tr></table>';
@@ -1924,11 +1924,18 @@ function wqg_create_shared_cart($manual_items = [])
     ];
 
     foreach ($cart as $cart_item_key => $cart_item) {
+        // Stocker le nom du produit pour pouvoir l'afficher si le produit est supprimé plus tard
+        $product_name = '';
+        if (isset($cart_item['data']) && is_object($cart_item['data'])) {
+            $product_name = $cart_item['data']->get_name();
+        }
+
         $item = [
             'product_id'     => (int) $cart_item['product_id'],
             'variation_id'   => (int) ($cart_item['variation_id'] ?? 0),
             'quantity'        => (int) $cart_item['quantity'],
             'variation_data' => $cart_item['variation'] ?? [],
+            '_product_name'  => $product_name,
         ];
 
         // WAPF (Advanced Product Fields)
@@ -1975,8 +1982,9 @@ function wqg_create_shared_cart($manual_items = [])
         'manual_items' => array_values((array) $manual_items), // produits manuels du devis PDF
     ];
 
-    $expiry = max(1, (int) get_option('wqg_cart_share_expiry', 30)) * DAY_IN_SECONDS;
-    set_transient('wqg_shared_cart_' . $token, $shared_cart, $expiry);
+    // Stockage en fichier JSON (persiste indépendamment de la BDD et du cache)
+    $expiry_days = max(60, (int) get_option('wqg_cart_share_expiry', 60));
+    wqg_save_shared_cart_file($token, $shared_cart, $expiry_days);
 
     return $token;
 }
@@ -2017,6 +2025,145 @@ function wqg_save_view_image($data_uri, $token, $cart_key, $index)
 
     return $upload['baseurl'] . '/wqg-views/' . $token . '/' . $filename;
 }
+
+// ============================================================
+// STOCKAGE FICHIER JSON POUR LES PANIERS PARTAGÉS
+// ============================================================
+
+/**
+ * Retourne le chemin du répertoire de stockage des paniers partagés.
+ * Le crée s'il n'existe pas, avec un .htaccess de protection.
+ */
+function wqg_get_carts_dir()
+{
+    $upload_dir = wp_upload_dir();
+    $dir = $upload_dir['basedir'] . '/wqg-carts';
+    if (!is_dir($dir)) {
+        wp_mkdir_p($dir);
+        // Protection .htaccess contre l'accès direct
+        $htaccess = $dir . '/.htaccess';
+        if (!file_exists($htaccess)) {
+            file_put_contents($htaccess, "Deny from all\n");
+        }
+        // Index vide
+        $index = $dir . '/index.php';
+        if (!file_exists($index)) {
+            file_put_contents($index, "<?php\n// Silence is golden.\n");
+        }
+    }
+    return $dir;
+}
+
+/**
+ * Sauvegarde un panier partagé en fichier JSON.
+ *
+ * @param string $token       Token UUID.
+ * @param array  $shared_cart Données du panier.
+ * @param int    $expiry_days Durée de validité en jours.
+ * @return bool
+ */
+function wqg_save_shared_cart_file($token, $shared_cart, $expiry_days)
+{
+    $dir  = wqg_get_carts_dir();
+    $file = $dir . '/' . $token . '.json';
+
+    $shared_cart['_expiry_days'] = $expiry_days;
+    $shared_cart['_expires_at']  = gmdate('Y-m-d H:i:s', time() + ($expiry_days * DAY_IN_SECONDS));
+
+    $json = wp_json_encode($shared_cart, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    return file_put_contents($file, $json) !== false;
+}
+
+/**
+ * Charge un panier partagé depuis un fichier JSON.
+ * Retourne les données ou false si le fichier n'existe pas ou est expiré.
+ *
+ * @param string $token Token UUID.
+ * @return array|false
+ */
+function wqg_load_shared_cart_file($token)
+{
+    $dir  = wqg_get_carts_dir();
+    $file = $dir . '/' . $token . '.json';
+
+    if (!file_exists($file)) {
+        return false;
+    }
+
+    $json = file_get_contents($file);
+    $data = json_decode($json, true);
+    if (!is_array($data)) {
+        return false;
+    }
+
+    // Vérifier l'expiration
+    if (!empty($data['_expires_at'])) {
+        $expires = strtotime($data['_expires_at']);
+        if ($expires !== false && $expires < time()) {
+            // Expiré — supprimer le fichier et le dossier d'images associé
+            @unlink($file);
+            wqg_cleanup_cart_images($token);
+            return false;
+        }
+    }
+
+    return $data;
+}
+
+/**
+ * Supprime le dossier d'images WPC pour un token donné.
+ */
+function wqg_cleanup_cart_images($token)
+{
+    $upload_dir = wp_upload_dir();
+    $views_dir  = $upload_dir['basedir'] . '/wqg-views/' . $token;
+    if (is_dir($views_dir)) {
+        $files = glob($views_dir . '/*');
+        if ($files) {
+            foreach ($files as $f) {
+                @unlink($f);
+            }
+        }
+        @rmdir($views_dir);
+    }
+}
+
+/**
+ * Nettoyage des fichiers JSON et images expirés.
+ * Appelé via wp_scheduled_delete (cron quotidien WordPress).
+ */
+function wqg_cleanup_expired_carts()
+{
+    $dir = wqg_get_carts_dir();
+    if (!is_dir($dir)) {
+        return;
+    }
+
+    $files = glob($dir . '/*.json');
+    if (!$files) {
+        return;
+    }
+
+    $now = time();
+    foreach ($files as $file) {
+        $json = file_get_contents($file);
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            @unlink($file);
+            continue;
+        }
+
+        if (!empty($data['_expires_at'])) {
+            $expires = strtotime($data['_expires_at']);
+            if ($expires !== false && $expires < $now) {
+                $token = basename($file, '.json');
+                @unlink($file);
+                wqg_cleanup_cart_images($token);
+            }
+        }
+    }
+}
+add_action('wp_scheduled_delete', 'wqg_cleanup_expired_carts');
 
 /**
  * Retourne l'ID du produit WooCommerce virtuel utilisé comme placeholder
@@ -2140,7 +2287,12 @@ function wqg_restore_shared_cart()
         exit;
     }
 
-    $shared_cart = get_transient('wqg_shared_cart_' . $token);
+    // Charger depuis le fichier JSON (priorité), fallback transient pour rétrocompatibilité
+    $shared_cart = wqg_load_shared_cart_file($token);
+    if (empty($shared_cart)) {
+        // Fallback : ancien format transient (migration transparente)
+        $shared_cart = get_transient('wqg_shared_cart_' . $token);
+    }
     if (empty($shared_cart) || empty($shared_cart['items'])) {
         wc_add_notice(__('Ce lien de panier a expiré ou est invalide.', 'wqg'), 'error');
         wp_safe_redirect(wc_get_cart_url());
@@ -2164,11 +2316,24 @@ function wqg_restore_shared_cart()
     }
 
     $restored = 0;
+    $skipped  = 0;
+    $skipped_names = [];
+
     foreach ($shared_cart['items'] as $item) {
         $product_id   = (int) $item['product_id'];
         $variation_id = (int) ($item['variation_id'] ?? 0);
         $quantity     = max(1, (int) ($item['quantity'] ?? 1));
         $variation    = $item['variation_data'] ?? [];
+
+        // Vérifier que le produit existe toujours
+        $check_id = $variation_id > 0 ? $variation_id : $product_id;
+        $product  = wc_get_product($check_id);
+        if (!$product || $product->get_status() === 'trash') {
+            // Produit supprimé ou mis à la corbeille — on le saute
+            $skipped++;
+            $skipped_names[] = $item['_product_name'] ?? ('#' . $product_id);
+            continue;
+        }
 
         // Reconstruire les données custom du cart item
         // Note : base64_cart_image_data est volontairement absent ici —
@@ -2300,12 +2465,17 @@ function wqg_restore_shared_cart()
     }
 
     if ($restored > 0) {
-        wc_add_notice(
-            sprintf(__('Panier restauré avec succès (%d produit(s)).', 'wqg'), $restored),
-            'success'
-        );
+        $msg = sprintf(__('Panier restauré avec succès (%d produit(s)).', 'wqg'), $restored);
+        if ($skipped > 0) {
+            $msg .= ' ' . sprintf(
+                __('%d produit(s) non disponible(s) ont été ignorés : %s', 'wqg'),
+                $skipped,
+                implode(', ', $skipped_names)
+            );
+        }
+        wc_add_notice($msg, $skipped > 0 ? 'notice' : 'success');
     } else {
-        wc_add_notice(__('Impossible de restaurer les produits du panier. Certains produits ne sont peut-être plus disponibles.', 'wqg'), 'error');
+        wc_add_notice(__('Impossible de restaurer les produits du panier. Les produits ne sont plus disponibles.', 'wqg'), 'error');
     }
 
     wp_safe_redirect(wc_get_cart_url());
@@ -2411,7 +2581,7 @@ function wqg_ajax_share_cart()
         wp_send_json_error('Le panier est vide.');
     }
 
-    $expiry_days = max(1, (int) get_option('wqg_cart_share_expiry', 30));
+    $expiry_days = max(60, (int) get_option('wqg_cart_share_expiry', 60));
 
     wp_send_json_success([
         'url'         => wqg_get_shared_cart_url($token),
@@ -2444,7 +2614,7 @@ function wqg_register_settings()
         'wqg_ai_system_prompt'     => WQG_DEFAULT_AI_PROMPT,
         'wqg_gallery_categories'   => '',   // Vide = toutes les catégories
         'wqg_gallery_image_indices'=> '',   // Vide = toutes les images
-        'wqg_cart_share_expiry'    => '30', // Durée de validité des liens de partage en jours
+        'wqg_cart_share_expiry'    => '60', // Durée de validité des liens de partage en jours (min 60)
     ];
     foreach ($defaults as $key => $value) {
         add_option($key, $value);
@@ -2729,10 +2899,12 @@ function wqg_options_page()
                     <th><label for="wqg_cart_share_expiry">Durée de validité du lien</label></th>
                     <td>
                         <input type="number" id="wqg_cart_share_expiry" name="wqg_cart_share_expiry"
-                               class="small-text" min="1" max="365"
-                               value="<?php echo esc_attr(get_option('wqg_cart_share_expiry', '30')); ?>" /> jours
+                               class="small-text" min="60" max="365"
+                               value="<?php echo esc_attr(get_option('wqg_cart_share_expiry', '60')); ?>" /> jours (minimum 60)
                         <p class="description">
-                            Durée pendant laquelle le lien de partage du panier reste actif.<br>
+                            Durée pendant laquelle le lien de partage du panier reste actif (stocké en fichier sur le serveur).<br>
+                            Les liens survivent aux mises à jour du plugin et au vidage de cache.<br>
+                            Si un produit est supprimé entre-temps, il sera ignoré et les autres produits du panier seront restaurés.<br>
                             Un QR code et un lien cliquable seront automatiquement ajoutés au devis PDF.<br>
                             Un bouton « Partager ce panier » apparaît également sur la page panier WooCommerce.
                         </p>
