@@ -76,7 +76,7 @@
                 '<input type="number"' +
                        ' name="wqg_manual[' + idx + '][qty]"' +
                        ' class="wqg-input-qty"' +
-                       ' value="1" step="1">' +
+                       ' value="1" min="-9999" step="1">' +
             '</div>' +
 
             /* Taux TVA */
@@ -96,7 +96,7 @@
                 '<input type="number"' +
                        ' name="wqg_manual[' + idx + '][price_ht]"' +
                        ' class="wqg-input-ht"' +
-                       ' value="" step="0.01"' +
+                       ' value="" min="-999999" step="0.01"' +
                        ' placeholder="0,00"' +
                        ' required>' +
             '</div>' +
