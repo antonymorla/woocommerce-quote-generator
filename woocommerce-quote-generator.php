@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.7
+ * Version:      3.8
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -1395,19 +1395,25 @@ function wqg_build_quote_html($client_data)
 
         $img_cell = $show_images ? '<td style="text-align:center; width:165px;">&nbsp;</td>' : '';
 
+        $is_discount    = $ht < 0;
+        $price_style    = $is_discount ? 'color:#c0392b;' : '';
+        $label_sub      = $is_discount
+            ? '<div class="product-option" style="color:#c0392b; font-style:italic;">Remise / Réduction</div>'
+            : '<div class="product-option" style="color:#2E5FA3; font-style:italic;">Produit ajouté manuellement</div>';
+
         $html .= '<tr class="' . $row_class . ' product-manual">
             ' . $img_cell . '
             <td>
                 <div class="product-name">' . esc_html($item['description']) . '</div>
-                <div class="product-option" style="color:#2E5FA3; font-style:italic;">Produit ajouté manuellement</div>
+                ' . $label_sub . '
             </td>
             <td style="text-align:center;">' . $qty . '</td>
-            <td style="text-align:right;">' . wc_price($ht) . '</td>
-            <td style="text-align:right;">' . wc_price($unit_tva) . '
+            <td style="text-align:right; ' . $price_style . '">' . wc_price($ht) . '</td>
+            <td style="text-align:right; ' . $price_style . '">' . wc_price($unit_tva) . '
                 <span style="font-size:9px; color:#999999;"> (' . $tva_rate . '%)</span>
             </td>
-            <td style="text-align:right;">' . wc_price($unit_ttc) . '</td>
-            <td style="text-align:right; font-weight:bold;">' . wc_price($line_ttc) . '</td>
+            <td style="text-align:right; ' . $price_style . '">' . wc_price($unit_ttc) . '</td>
+            <td style="text-align:right; font-weight:bold; ' . $price_style . '">' . wc_price($line_ttc) . '</td>
         </tr>';
     }
 
@@ -1701,7 +1707,7 @@ function wqg_generate_quote()
             $qty      = max(1, (int) ($raw['qty'] ?? 1));
             $price_ht = round((float) str_replace(',', '.', $raw['price_ht'] ?? '0'), 4);
             $tva_rate = round((float) ($raw['tva'] ?? 20), 2);
-            if (empty($desc) || $price_ht <= 0) {
+            if (empty($desc) || $price_ht == 0) {
                 continue;
             }
             if (!in_array($tva_rate, $allowed_tva, true)) {
@@ -2376,7 +2382,7 @@ function wqg_restore_shared_cart()
                 $qty       = max(1, (int) ($manual['qty'] ?? 1));
                 $price_ht  = (float) ($manual['price_ht'] ?? 0);
                 $tva_rate  = (float) ($manual['tva_rate'] ?? 20);
-                if (empty($desc) || $price_ht <= 0) {
+                if (empty($desc) || $price_ht == 0) {
                     continue;
                 }
                 $added = WC()->cart->add_to_cart(

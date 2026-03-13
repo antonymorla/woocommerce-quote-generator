@@ -23,7 +23,7 @@
         var tva = parseFloat(tvaSelect.value || '20');
         var qty = parseInt(qtyInput.value || '1', 10);
 
-        if (isNaN(ht)  || ht  < 0) { ht  = 0; }
+        if (isNaN(ht)) { ht  = 0; }
         if (isNaN(tva) || tva < 0) { tva = 20; }
         if (isNaN(qty) || qty < 1) { qty = 1; }
 
@@ -31,9 +31,12 @@
         var unitTtc = ht + unitTva;
         var totalTtc = unitTtc * qty;
 
+        var isNeg = totalTtc < 0;
+        var color = isNeg ? '#c0392b' : '#7A94BF';
+        var sign  = isNeg ? '- ' : '';
         ttcDisplay.innerHTML =
-            '<span style="font-size:10px; color:#7A94BF;">unit. ' + fmt(unitTtc) + ' €</span><br>' +
-            '<strong>' + fmt(totalTtc) + ' €</strong>';
+            '<span style="font-size:10px; color:' + color + ';">unit. ' + sign + fmt(Math.abs(unitTtc)) + ' €</span><br>' +
+            '<strong style="color:' + (isNeg ? '#c0392b' : 'inherit') + ';">' + sign + fmt(Math.abs(totalTtc)) + ' €</strong>';
     }
 
     // ----------------------------------------------------------------
@@ -93,7 +96,7 @@
                 '<input type="number"' +
                        ' name="wqg_manual[' + idx + '][price_ht]"' +
                        ' class="wqg-input-ht"' +
-                       ' value="" min="0" step="0.01"' +
+                       ' value="" step="0.01"' +
                        ' placeholder="0,00"' +
                        ' required>' +
             '</div>' +
