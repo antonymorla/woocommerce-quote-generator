@@ -25,7 +25,7 @@
 
         if (isNaN(ht)) { ht  = 0; }
         if (isNaN(tva) || tva < 0) { tva = 20; }
-        if (isNaN(qty) || qty < 1) { qty = 1; }
+        if (isNaN(qty) || qty === 0) { qty = 1; }
 
         var unitTva = ht * tva / 100;
         var unitTtc = ht + unitTva;
@@ -76,7 +76,7 @@
                 '<input type="number"' +
                        ' name="wqg_manual[' + idx + '][qty]"' +
                        ' class="wqg-input-qty"' +
-                       ' value="1" min="1" step="1">' +
+                       ' value="1" step="1">' +
             '</div>' +
 
             /* Taux TVA */

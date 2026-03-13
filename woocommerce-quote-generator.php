@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.8
+ * Version:      3.8.1
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -1704,7 +1704,8 @@ function wqg_generate_quote()
         $allowed_tva = [0.0, 5.5, 10.0, 20.0];
         foreach ($_POST['wqg_manual'] as $raw) {
             $desc     = sanitize_text_field($raw['description'] ?? '');
-            $qty      = max(1, (int) ($raw['qty'] ?? 1));
+            $qty      = (int) ($raw['qty'] ?? 1);
+            if ($qty === 0) { $qty = 1; }
             $price_ht = round((float) str_replace(',', '.', $raw['price_ht'] ?? '0'), 4);
             $tva_rate = round((float) ($raw['tva'] ?? 20), 2);
             if (empty($desc) || $price_ht == 0) {
@@ -2379,7 +2380,8 @@ function wqg_restore_shared_cart()
         if ($placeholder_id) {
             foreach ($shared_cart['manual_items'] as $manual) {
                 $desc      = sanitize_text_field($manual['description'] ?? '');
-                $qty       = max(1, (int) ($manual['qty'] ?? 1));
+                $qty       = (int) ($manual['qty'] ?? 1);
+                if ($qty === 0) { $qty = 1; }
                 $price_ht  = (float) ($manual['price_ht'] ?? 0);
                 $tva_rate  = (float) ($manual['tva_rate'] ?? 20);
                 if (empty($desc) || $price_ht == 0) {
