@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.8.2
+ * Version:      3.8.3
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -2244,7 +2244,15 @@ add_action('woocommerce_before_calculate_totals', function ($cart) {
             $price_ht  = (float) $item['wqg_manual_item']['price_ht'];
             $tva_rate  = (float) $item['wqg_manual_item']['tva_rate'];
             $tax_class = wqg_find_tax_class_for_rate($tva_rate);
-            $item['data']->set_price($price_ht);
+
+            // Si WooCommerce attend des prix TTC, convertir HT → TTC
+            if (wc_prices_include_tax()) {
+                $price = $price_ht * (1 + $tva_rate / 100);
+            } else {
+                $price = $price_ht;
+            }
+
+            $item['data']->set_price($price);
             $item['data']->set_tax_class($tax_class);
         }
     }
