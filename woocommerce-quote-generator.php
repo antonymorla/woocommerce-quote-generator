@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  WooCommerce Quote Generator
  * Description:  Devis PDF identique pour le client (téléchargement) et l'admin (email + pièce jointe). Support WAPF, WP Configurator Pro, codes promo, TVA par ligne, images, descriptions IA, ajout manuel de produits (admin).
- * Version:      3.8.3
+ * Version:      3.8.4
  * Author:       Abri Français
  * Requires PHP: 7.4
  */
@@ -1814,7 +1814,21 @@ function wqg_generate_quote()
             . '<td style="border:none; text-align:right; padding-right:15px;">Page {PAGENO}&nbsp;/&nbsp;{nbpg}</td>'
             . '</tr></table>'
         );
-        $mpdf->WriteHTML($quote_html);
+        // Augmenter la limite PCRE pour les gros devis (images nombreuses)
+        @ini_set('pcre.backtrack_limit', '10000000');
+
+        // Découper le HTML en morceaux pour éviter l'erreur pcre.backtrack_limit de mPDF
+        $html_chunks = preg_split('/(?=<div|<table|<section)/i', $quote_html);
+        if ($html_chunks === false || count($html_chunks) <= 1) {
+            // Fallback : passer tout d'un bloc si le split échoue
+            $mpdf->WriteHTML($quote_html);
+        } else {
+            foreach ($html_chunks as $chunk) {
+                if (trim($chunk) !== '') {
+                    $mpdf->WriteHTML($chunk);
+                }
+            }
+        }
         $pdf_content  = $mpdf->Output('', 'S');
         $pdf_filename = 'devis-' . time() . '.pdf';
 
@@ -2199,6 +2213,7 @@ function wqg_get_or_create_manual_product()
     $product->set_price(0);
     $product->set_regular_price(0);
     $product->set_virtual(true);
+    $product->set_tax_status('taxable');
     $product->set_sold_individually(false);
     $product->set_manage_stock(false);
     $pid = $product->save();
@@ -2253,6 +2268,7 @@ add_action('woocommerce_before_calculate_totals', function ($cart) {
             }
 
             $item['data']->set_price($price);
+            $item['data']->set_tax_status('taxable');
             $item['data']->set_tax_class($tax_class);
         }
     }
